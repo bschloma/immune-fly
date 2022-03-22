@@ -48,7 +48,7 @@ def convert_czi_views_to_zarr(path_to_czi_dir, path_to_new_zarr, namestr, core_n
     root = zarr.open(path_to_new_zarr, mode='w-')
 
     # assume 2 sheets
-    sheet_numbers = [0, 1]
+    num_sheets = 2
 
     if channel_names is None:
         # get channel names from first file
@@ -60,17 +60,21 @@ def convert_czi_views_to_zarr(path_to_czi_dir, path_to_new_zarr, namestr, core_n
     for f in range(numfiles):
         print("collecting view " + str(f) + ' of ' + str(numfiles-1))
         this_file_name = zeiss_filename(core_name, suffix, f)
-        img = AICSImage(path_to_czi_dir + '/' + this_file_name, reader=readers.bioformats_reader.BioformatsReader)
-        view = root.create_group("View" + str(f))
-        for s in sheet_numbers:
-            sheet = view.create_group("Sheet" + str(s))
-            for c in range(len(channel_names)):
-                channel = sheet.create_group(channel_names[c])
-                for t in range(img.shape[0]):
-                    this_data = img.get_image_dask_data("ZYX", C=c+2*s, T=t)
-                    this_data.rechunk(chunk_sizes)
-                    arr = channel.create(name='T' + str(t), shape=this_data.shape)
-                    da.to_zarr(this_data, arr)
+        #img = AICSImage(path_to_czi_dir + '/' + this_file_name, reader=readers.bioformats_reader.BioformatsReader)
+        # use default czi reader
+        img = AICSImage(path_to_czi_dir + '/' + this_file_name)
+        # update sheet number (successive files are different sheets, until all sheets are reached)
+        s = np.mod(f, num_sheets)
+        if s == 0:
+            view = root.create_group("View" + str(f/num_sheets))
+        sheet = view.create_group("Sheet" + str(s))
+        for c in range(len(channel_names)):
+            channel = sheet.create_group(channel_names[c])
+            for t in range(img.shape[0]):
+                this_data = img.get_image_dask_data("ZYX", C=c, T=t)
+                this_data.rechunk(chunk_sizes)
+                arr = channel.create(name='T' + str(t), shape=this_data.shape)
+                da.to_zarr(this_data, arr)
         del img
 
 
