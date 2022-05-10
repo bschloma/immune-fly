@@ -7,8 +7,11 @@ import glob
 import dask.array as da
 from matplotlib.pyplot import imread
 from dexp.datasets import ZDataset
+#from tqdm import tqdm
 from pathlib import Path
-from tqdm import tqdm
+import os
+import h5py
+import zarr
 
 
 def extract_coords(im_bio):
@@ -227,7 +230,11 @@ def convert_czi_views_to_fuse_reg_ZD(path_to_czi_dir, path_to_new_zarr, num_time
         tmp_zarr = zarr.open(tmp_zarr_path.__str__(), 'w')
         tmp_big_stack = tmp_zarr.create('tmp_big_stack', shape=(len(channel_names),) + big_shape, dtype=first_img.dtype,
                                         chunks=chunk_sizes)
-        for v in tqdm(range(num_views), 'converting time point ' + str(t) + ' of ' + str(num_time_points - 1)):
+
+        # note: apparent issue with tqdm and napari
+        #for v in tqdm(range(num_views), 'converting time point ' + str(t) + ' of ' + str(num_time_points - 1)):
+        for v in range(num_views):
+
             # sheet_0
             s = 0
             file_number = get_file_number_from_tvs(id_tree, t, v, s)
@@ -313,3 +320,66 @@ def check_big_shape(big_shape, x, y, z, view_size):
     assert max_needed_size + these_coords[0] <= big_shape[this_dim], f'z mismatch in big_size'
 
     return
+
+
+def ZDataset_to_hdf5(path_to_zarr, path_to_new_hdf5, channels):
+    ds = ZDataset(path_to_zarr, mode="r-")
+    for channel in channels:
+        data = da.array(ds.get_array(channel))
+        da.to_hdf5(path_to_new_hdf5, '/' + channel, data)
+
+    return
+
+
+def ZDataset_to_individual_hdf5s(path_to_zarr, path_to_new_hdf5_dir, channels, timepoints=None, z_slices=None):
+    """convert part of a ZDataset to a dir of h5 files, one for each z slice."""
+    ds = ZDataset(path_to_zarr, mode="r")
+    for channel in channels:
+        data = da.array(ds.get_array(channel))
+        if timepoints is None:
+            timepoints = range(data.shape[0])
+        if z_slices is None:
+            z_slices = range(data.shape[1])
+        for t in timepoints:
+            print(t)
+            os.mkdir(path_to_new_hdf5_dir + '/scan_' + str(t))
+
+            # note: issue with tqdm and napari
+            #for z in tqdm(z_slices, 'converting slices for time: ' + str(t)):
+            for counter, z in enumerate(z_slices):
+                print(str(counter) + ' of ' + str(len(z_slices)))
+                this_slice = data[t, z]
+                da.to_hdf5(path_to_new_hdf5_dir + '/scan_' + str(t) + '/z_' + str(z) + '.h5', '/' + channel, this_slice)
+
+    return
+
+
+def individual_hdf5s_to_ZDataset(path_to_hdf5_dir, path_to_new_zarr, z_slices, prefix, suffix, dtype):
+    """one timepoint for now"""
+    file_names = glob.glob(path_to_hdf5_dir + '/*.h5')
+    if z_slices is None:
+        z_slices = range(len(file_names))
+
+    ds = ZDataset(path_to_new_zarr, mode='w-')
+
+    # get channel and shape info from first file
+    channels = h5py.File(file_names[0]).keys()
+    for channel in channels:
+        slice_shape = np.squeeze(h5py.File(file_names[0]).get(channel)).shape
+        stack_shape = (1, len(z_slices)) + slice_shape
+        ds.add_channel(channel, shape=stack_shape, dtype=dtype, chunks=(1, 1) + slice_shape)
+        ds.write_array(channel, zarr.zeros(stack_shape))
+
+    # loop over slices and write to ZDataset
+    for channel in channels:
+        this_stack = ds.get_array(channel)
+        for z, z_slice in enumerate(z_slices):
+            print(str(z) + ' of ' + str(len(z_slices)))
+            file_name = path_to_hdf5_dir + '/' + prefix + str(z_slice) + suffix
+            f = h5py.File(file_name)
+            this_stack[0, z] = zarr.array(np.squeeze(f.get(channel)[0]))
+
+    ds.close()
+
+    return
+

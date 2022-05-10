@@ -11,7 +11,10 @@ suffix = r'.czi'
 namestr = '*.czi'
 chunk_sizes = (1, 64, 256, 256)
 channel_names = ['488nm', '561nm']
+num_time_points = 1
+num_views = 5
+num_sheets = 2
 
-convert_czi_views_to_zarr(path_to_czi_dir, path_to_new_zarr, namestr, core_file_name, suffix, chunk_sizes, channel_names)
+convert_czi_views_to_zarr(path_to_czi_dir, path_to_new_zarr, num_time_points, num_views, num_sheets, namestr, core_file_name, suffix, chunk_sizes, channel_names)
 
 
