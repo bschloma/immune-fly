@@ -165,6 +165,12 @@ def make_seeds_arr_from_points(points_df, path_to_seeds_zarr, shape):
     return
 
 
+def create_bacteria_labels(arr, path_to_bacteria_labels_zarr):
+    raise NotImplementedError
+
+    return
+
+
 class WS:
     """creating this weird class to use as superpixel generator in elf gasp"""
     def __init__(self, seeds, method="frangi", params=init_frangi_params(), thresh=1E-6):

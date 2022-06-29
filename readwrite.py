@@ -199,7 +199,7 @@ def convert_czi_views_to_fuse_reg_ZD(path_to_czi_dir, path_to_new_zarr, num_time
     # pixel sizes
     dx, dy, dz = extract_pixel_sizes_from_czi(path_to_czi_dir + '/' + first_file)
 
-    # convert positions to microns, then to pixels, and center on first scan
+    # convert positions to microns, then to pixels, and center on first scan. assumes first view is smallest y.
     x = np.int16(1e6 * (x - x[0]) / dx + first_img.dims.X)
     y = np.int16(1e6 * (y - y[0]) / dy)
     z = np.int16((z - z[0]) / dz + first_img.dims.Z)
@@ -260,6 +260,11 @@ def convert_czi_views_to_fuse_reg_ZD(path_to_czi_dir, path_to_new_zarr, num_time
             # assemble each view into tmp_big_stack
             for c in range(len(channel_names)):
                 sz, sy, sx = mean_sheet[c].shape
+                print(tmp_big_stack.shape)
+                print(mean_sheet.shape)
+                print(z[v])
+                print(y[v])
+                print(x[v])
                 tmp_big_stack[c, z[v]:z[v] + sz, y[v]:y[v] + sy, x[v]:x[v] + sx] = mean_sheet[c]
 
         for c in range(len(channel_names)):
