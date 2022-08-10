@@ -251,7 +251,102 @@ def convert_czi_views_to_fuse_reg_ZD(path_to_czi_dir, path_to_new_zarr, num_time
             img = AICSImage(path_to_czi_dir + '/' + this_file_name)
             sheet_1 = img.get_image_dask_data("CZYX", T=0)
             sheet_1.rechunk(chunk_sizes)
-            sheet_1 = sheet_0.astype(np.uint32)
+            sheet_1 = sheet_1.astype(np.uint32)
+
+            # fuse
+            mean_sheet = (sheet_0 + sheet_1) * 0.5
+            mean_sheet = mean_sheet.astype(np.uint16)
+
+            # assemble each view into tmp_big_stack
+            for c in range(len(channel_names)):
+                sz, sy, sx = mean_sheet[c].shape
+                print(tmp_big_stack.shape)
+                print(mean_sheet.shape)
+                print(z[v])
+                print(y[v])
+                print(x[v])
+                tmp_big_stack[c, z[v]:z[v] + sz, y[v]:y[v] + sy, x[v]:x[v] + sx] = mean_sheet[c]
+
+        for c in range(len(channel_names)):
+            grp = channel_names[c]
+            root.write_stack(grp, t, da.from_zarr(tmp_zarr.tmp_big_stack)[c])
+
+    return root
+
+
+def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, num_time_points, num_views, num_sheets, namestr,
+                                     core_name, suffix=r'.czi', chunk_sizes=(1, 64, 256, 256), channel_names=None,
+                                     big_shape=None):
+    """function to read in a folder of czi files, compute fusion + registration, then save as ome-zarr with prescribed chunking and pyramiding. Assumes file structure:
+    each czi file can contain multiple channels, but different sheets, views, and timepoints are separate files. Pyramid computation based on code by Jordao Bragantini.
+
+    Notes:   """
+
+    # get file names in czi dir
+    filenames = glob.glob(path_to_czi_dir + '/' + namestr)
+    num_files = len(filenames)
+
+    # get info from first file
+    first_file = zeiss_filename(core_name, suffix, 0)
+    first_img = AICSImage(path_to_czi_dir + '/' + first_file, reader=readers.bioformats_reader.BioformatsReader)
+
+    # will create a big shape for registration first, then crop later
+    if big_shape is None:
+        big_shape = (3 * first_img.dims.Z, num_views * first_img.dims.Y, 3 * first_img.dims.X)
+
+    # coordinates of each view
+    x, y, z = extract_coords_from_czi(path_to_czi_dir + '/' + first_file)
+
+    # pixel sizes
+    dx, dy, dz = extract_pixel_sizes_from_czi(path_to_czi_dir + '/' + first_file)
+
+    # convert positions to microns, then to pixels, and center on first scan. assumes first view is smallest y.
+    x = np.int16(1e6 * (x - x[0]) / dx + first_img.dims.X)
+    y = np.int16(1e6 * (y - y[0]) / dy)
+    z = np.int16((z - z[0]) / dz + first_img.dims.Z)
+
+    # check that the provided big shape is compatible with the data. Raise error if there's a problem
+    check_big_shape(big_shape, x, y, z, first_img.shape[2:])
+
+    # if no channel names are provided, get them from AICSImage
+    if channel_names is None:
+        channel_names = first_img.channel_names
+
+    # create file_id_tree used to pick the right image files
+    assert num_files == num_time_points * num_views * num_sheets
+    id_tree = create_file_id_hierarchy(num_time_points, num_views, num_sheets)
+
+    # create output ome-zarr
+    store = zarr.DirectoryStore(path_to_new_zarr)
+    root: zarr.Group = zarr.group(store=store, overwrite=False)
+
+    # create temporary zarr on disk for registering big stack that we will overwrite and then delete
+    tmp_zarr_path = Path(path_to_new_zarr).parent / 'tmp.zarr'
+    tmp_zarr = zarr.open(tmp_zarr_path.__str__(), 'w')
+    tmp_big_stack = tmp_zarr.create('tmp_big_stack', shape=(num_time_points, len(channel_names),) + big_shape, dtype=first_img.dtype,
+                                    chunks=chunk_sizes)
+
+    for t in range(num_time_points):
+
+        for v in range(num_views):
+
+            # sheet_0
+            s = 0
+            file_number = get_file_number_from_tvs(id_tree, t, v, s)
+            this_file_name = zeiss_filename(core_name, suffix, file_number)
+            img = AICSImage(path_to_czi_dir + '/' + this_file_name)
+            sheet_0 = img.get_image_dask_data("CZYX", T=0)
+            sheet_0.rechunk(chunk_sizes)
+            sheet_0 = sheet_0.astype(np.uint32)
+
+            # sheet_1
+            s = 1
+            file_number = get_file_number_from_tvs(id_tree, t, v, s)
+            this_file_name = zeiss_filename(core_name, suffix, file_number)
+            img = AICSImage(path_to_czi_dir + '/' + this_file_name)
+            sheet_1 = img.get_image_dask_data("CZYX", T=0)
+            sheet_1.rechunk(chunk_sizes)
+            sheet_1 = sheet_1.astype(np.uint32)
 
             # fuse
             mean_sheet = (sheet_0 + sheet_1) * 0.5
