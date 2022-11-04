@@ -277,7 +277,7 @@ def convert_czi_views_to_fuse_reg_ZD(path_to_czi_dir, path_to_new_zarr, num_time
 
 def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, num_time_points, num_views, num_sheets, namestr,
                                      core_name, suffix=r'.czi', chunk_sizes=(1, 64, 256, 256), channel_names=None,
-                                     big_shape=None, pyramid_scales=5):
+                                     big_shape=None, pyramid_scales=5, reversed_y = False):
     """function to read in a folder of czi files, compute fusion + registration, then save as ome-zarr with prescribed chunking and pyramiding. Assumes file structure:
     each czi file can contain multiple channels, but different sheets, views, and timepoints are separate files. Pyramid computation based on code by Jordao Bragantini.
 
@@ -290,24 +290,54 @@ def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, nu
     # get info from first file
     first_file = zeiss_filename(core_name, suffix, 0)
     first_img = AICSImage(path_to_czi_dir + '/' + first_file, reader=readers.bioformats_reader.BioformatsReader)
+    # trying a new way where I manually copy the 0th .czi file to parent directory, to see if this avoids memory issue
+    #first_img = AICSImage(Path(path_to_czi_dir).parent.__str__() + '/' + first_file, reader=readers.bioformats_reader.BioformatsReader)
 
     # will create a big shape for registration first, then crop later
     if big_shape is None:
         big_shape = (3 * first_img.dims.Z, num_views * first_img.dims.Y, 3 * first_img.dims.X)
 
-    # coordinates of each view
-    x, y, z = extract_coords_from_czi(path_to_czi_dir + '/' + first_file)
+    # coordinates of each view --- doing manually now to avoid remaking first_img
+    """extract xyz stage coordinates from a Bioformats Reader object"""
+    #num_views = len(first_img.metadata.images)
+    x = np.zeros(num_views)
+    y = np.zeros(num_views)
+    z = np.zeros(num_views)
 
-    # pixel sizes
-    dx, dy, dz = extract_pixel_sizes_from_czi(path_to_czi_dir + '/' + first_file)
+    for view in range(num_views):
+        x[view] = first_img.metadata.images[view].stage_label.x
+        y[view] = first_img.metadata.images[view].stage_label.y
+        z[view] = first_img.metadata.images[view].stage_label.z
+    #x, y, z = extract_coords_from_czi(path_to_czi_dir + '/' + first_file)
 
-    # convert positions to microns, then to pixels, and center on first scan. assumes first view is smallest y.
+    # pixel sizes --- doing manually now to avoid remaking first_img
+    dx = first_img.metadata.images[0].pixels.physical_size_x
+    dy = first_img.metadata.images[0].pixels.physical_size_y
+    dz = first_img.metadata.images[0].pixels.physical_size_z
+    #dx, dy, dz = extract_pixel_sizes_from_czi(path_to_czi_dir + '/' + first_file)
+
+    # convert positions to microns, then to pixels, and center on first scan.
+    # try ordering the stacks one way. If that leads to negative indices, order them the other way.
     x = np.int16(1e6 * (x - x[0]) / dx + first_img.dims.X)
+    if np.sum(x < 0) > 0:
+        x = np.int16(1e6 * (x - x[-1]) / dx + first_img.dims.X)
+
     y = np.int16(1e6 * (y - y[0]) / dy)
+    if np.sum(y < 0) > 0:
+        y = np.int16(1e6 * (y - y[-1]) / dy)
+
     z = np.int16((z - z[0]) / dz + first_img.dims.Z)
+    if np.sum(z < 0) > 0:
+        z = np.int16((z - z[-1]) / dz + first_img.dims.Z)
+
+    # old method:
+    # if reversed_y:
+    #     y = np.int16(1e6 * (y - y[-1]) / dy)
+    # else:
+    #     y = np.int16(1e6 * (y - y[0]) / dy)
 
     # check that the provided big shape is compatible with the data. Raise error if there's a problem
-    check_big_shape(big_shape, x, y, z, first_img.shape[2:])
+    check_big_shape(big_shape, x, y, z, first_img.shape[2:], reversed_y)
 
     # if no channel names are provided, get them from AICSImage
     if channel_names is None:
@@ -325,50 +355,56 @@ def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, nu
 
     print("computing fusion and registration")
     for t in range(num_time_points):
-        for v in range(num_views):
-            # sheet_0
-            s = 0
-            file_number = get_file_number_from_tvs(id_tree, t, v, s)
-            this_file_name = zeiss_filename(core_name, suffix, file_number)
-            img = AICSImage(path_to_czi_dir + '/' + this_file_name)
-            sheet_0 = img.get_image_dask_data("CZYX", T=0)
-            sheet_0.rechunk(chunk_sizes[1:])
-            sheet_0 = sheet_0.astype(np.uint32)
+        try:
+            for v in range(num_views):
+                # sheet_0
+                s = 0
+                file_number = get_file_number_from_tvs(id_tree, t, v, s)
+                this_file_name = zeiss_filename(core_name, suffix, file_number)
+                img = AICSImage(path_to_czi_dir + '/' + this_file_name)
+                sheet_0 = img.get_image_dask_data("CZYX", T=0)
+                sheet_0.rechunk(chunk_sizes[1:])
+                sheet_0 = sheet_0.astype(np.uint32)
 
-            # sheet_1
-            s = 1
-            file_number = get_file_number_from_tvs(id_tree, t, v, s)
-            this_file_name = zeiss_filename(core_name, suffix, file_number)
-            img = AICSImage(path_to_czi_dir + '/' + this_file_name)
-            sheet_1 = img.get_image_dask_data("CZYX", T=0)
-            sheet_1.rechunk(chunk_sizes[1:])
-            sheet_1 = sheet_1.astype(np.uint32)
+                # sheet_1
+                s = 1
+                file_number = get_file_number_from_tvs(id_tree, t, v, s)
+                this_file_name = zeiss_filename(core_name, suffix, file_number)
+                img = AICSImage(path_to_czi_dir + '/' + this_file_name)
+                sheet_1 = img.get_image_dask_data("CZYX", T=0)
+                sheet_1.rechunk(chunk_sizes[1:])
+                sheet_1 = sheet_1.astype(np.uint32)
 
-            # fuse
-            mean_sheet = (sheet_0 + sheet_1) * 0.5
-            mean_sheet = mean_sheet.astype(np.uint16)
+                # fuse
+                mean_sheet = (sheet_0 + sheet_1) * 0.5
+                mean_sheet = mean_sheet.astype(np.uint16)
 
-            # assemble each view into tmp_big_stack
-            for c in range(len(channel_names)):
-                sz, sy, sx = mean_sheet[c].shape
-                print("writing c " + str(c))
-                tmp_big_stack[t, c, z[v]:z[v] + sz, y[v]:y[v] + sy, x[v]:x[v] + sx] = mean_sheet[c]
+                # assemble each view into tmp_big_stack
+                for c in range(len(channel_names)):
+                    sz, sy, sx = mean_sheet[c].shape
+                    print("writing c " + str(c))
+                    print('this stack shape = ' + str(mean_sheet[c].shape))
+                    print('this location in big stack = ' + str(z[v]) + ', ' + str(y[v]) + ', ' + str(x[v]))
+                    tmp_big_stack[t, c, z[v]:z[v] + sz, y[v]:y[v] + sy, x[v]:x[v] + sx] = mean_sheet[c]
 
-            print("time point " + str(t) +": completed view number " + str(v))
+                print("time point " + str(t) +": completed view number " + str(v))
+        except ValueError:
+            print('error with time point' + str(t) + ', skipping')
+            continue
+
 
     # crop out black
-    crop_padding(str(tmp_zarr_path))
+    slicing = get_nonzero_slicing_range_ome(tmp_zarr_path.__str__(), 'tmp_big_stack')
+    crop_padding(tmp_zarr_path.__str__(), slicing=slicing)
 
-    #
-    #
-    # # compute pyramid structure
-    # print("creating pyramid structure")
-    # # create output ome-zarr
-    # root = create_pyramid_from_zarr(path_to_plain_zarr, 'tmp_big_stack', path_to_new_zarr, pyramid_scales, chunk_sizes):
-    # print("done!")
+    # compute pyramid structure
+    print("creating pyramid structure")
+    # create output ome-zarr
+    path_to_crop_zarr = tmp_zarr_path.parent / 'tmp.crop.zarr'
+    root = create_pyramid_from_zarr(path_to_crop_zarr.__str__(), 'tmp_crop', path_to_new_zarr, pyramid_scales, chunk_sizes)
+    print("done!")
 
-    return tmp_zarr
-    #return root
+    return root
 
 
 def crop_padding(tmp_zarr_path, slicing=None):
@@ -376,6 +412,7 @@ def crop_padding(tmp_zarr_path, slicing=None):
     tmp_big_stack = tmp_root.get('tmp_big_stack')
     if slicing is None:
         slicing = get_nonzero_slicing_range_ome(tmp_zarr_path, 'tmp_big_stack')
+    print(slicing)
     cropped_size_z = slicing[0][1] - slicing[0][0]
     cropped_size_y = slicing[1][1] - slicing[1][0]
     cropped_size_x = slicing[2][1] - slicing[2][0]
@@ -580,7 +617,7 @@ def get_nonzero_slicing_range_ome(path_to_zarr, group_name):
     return slicing
 
 
-def check_big_shape(big_shape, x, y, z, view_size):
+def check_big_shape(big_shape, x, y, z, view_size, reversed_y=False):
     # x
     these_coords = x
     this_dim = 2
@@ -593,7 +630,11 @@ def check_big_shape(big_shape, x, y, z, view_size):
     this_dim = 1
     this_scan_size = view_size[this_dim]
     max_needed_size = np.max(these_coords) + this_scan_size - np.min(these_coords)
-    assert max_needed_size + these_coords[0] <= big_shape[this_dim], f'y mismatch in big_size'
+    if reversed_y:
+        y_id = -1
+    else:
+        y_id = 0
+    assert max_needed_size + these_coords[y_id] <= big_shape[this_dim], f'y mismatch in big_size'
 
     # z
     these_coords = z
