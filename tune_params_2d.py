@@ -11,10 +11,12 @@ import time
 import napari
 from magicgui import magicgui
 from napari.types import ImageData
+from PIL import Image
+from scipy.ndimage import distance_transform_edt
 
 
-#path_to_mip = r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2022_02_24_uas-mcd8-gfp_r4-gal4_x_dipt_dtom2/ctl_no_ether_no_inj/larvae_1/ds_h5/scan_0/predictions_mip.zarr'
-path_to_ds = r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2022_02_24_uas-mcd8-gfp_r4-gal4_x_dipt_dtom2/ctl_no_ether_no_inj/larvae_1/crop.zarr'
+path_to_mip = r'/media/brandon/Data1/Brandon/fly_immune/Serenity/2022_08_24_dpt-gfp_silverman_r4-gal4_uas-mcd8-mcherry_ecoli-hs-dtom/larvae_1/ds_h5/scan_0/pred_mip.tif'
+#path_to_ds = r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2022_02_24_uas-mcd8-gfp_r4-gal4_x_dipt_dtom2/ecoli_hs_gfp/larvae_4/ds_h5/scan_0/predictions.zarr'
 # sigma_blur = 8.0
 # sigmas = 8.0#np.arange(1, 10, 2)
 # alpha = 0.5
@@ -33,11 +35,12 @@ def frangi_filter(arr, _sigma_blur, _sigmas, _alpha, _beta, _gamma, thresh):
         arr = frangi(arr, sigmas=_sigmas, alpha=_alpha, beta=_beta, gamma=_gamma)
 
     # create and apply a mask
-    #arr = arr < thresh
-    arr = arr > thresh
+    arr = arr < thresh
+    #arr = arr > thresh
     #arr = arr * (og_arr > 3000)
-    arr = binary_opening(arr, disk(9))
+    #arr = binary_opening(arr, disk(9))
     #arr = binary_erosion(arr, disk(5))
+    #arr = arr == 0
 
     #arr = arr * og_arr
     arr = label(arr)
@@ -84,11 +87,17 @@ def magic_func(layer: ImageData, sigma_blur: float = 1.0, beta: float = 0.5, l_g
 
 
 #mem = zarr.open(path_to_mip, 'r')
-ds = ZDataset(path_to_ds, 'r')
-mem = ds.get_array('mem-green')
-mem_da = da.from_array(mem[0], chunks=mem.chunks[1:])
+#ds = ZDataset(path_to_ds, 'r')
+#mem = ds.get_array('mem-green')
+#mem = zarr.open(path_to_ds).pred
+#mem_da = da.from_array(mem[0, 0], chunks=mem.chunks[2:])
 #mem_da = da.from_array(mem, chunks=(1, 8200, 2071))
 #mem_da = da.from_array(mem[0], chunks=(1, 1024, 1024))
+mem = np.array(Image.open(path_to_mip))
+#mem = mem > 0.4
+#mem = distance_transform_edt(mem)
+mem = np.expand_dims(mem, axis=0)
+mem_da = da.from_array(mem)
 
 #filt_np = gpu_process(mem_da, beta)
 
