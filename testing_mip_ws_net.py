@@ -11,14 +11,19 @@ from skimage.segmentation import watershed
 #mem = ds.get_array('mem-green')
 #mem_da = da.from_array(mem[0], chunks=(1, 8200, 2071))
 #mem_da = da.from_array(mem[0], chunks=(1, 8200, 2071))
-labels_zarr = r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2022_02_24_uas-mcd8-gfp_r4-gal4_x_dipt_dtom2/ctl_no_ether_no_inj/larvae_1/ds_h5/scan_0/segmentation_mip_manual.zarr'
-boundaries_path = r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2022_02_24_uas-mcd8-gfp_r4-gal4_x_dipt_dtom2/ctl_no_ether_no_inj/larvae_1/ds_h5/scan_0/predictions_mip.zarr'
-seeds_path =r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2022_02_24_uas-mcd8-gfp_r4-gal4_x_dipt_dtom2/ctl_no_ether_no_inj/larvae_1/ds_h5/scan_0/manual_seeds.zarr'
+labels_zarr = r'/media/brandon/Data1/Brandon/fly_immune/Serenity/2022_08_24_dpt-gfp_silverman_r4-gal4_uas-mcd8-mcherry_ecoli-hs-dtom/larvae_1/ds_h5/scan_0/labels_pred.zarr'
+boundaries_path = r'/media/brandon/Data1/Brandon/fly_immune/Serenity/2022_08_24_dpt-gfp_silverman_r4-gal4_uas-mcd8-mcherry_ecoli-hs-dtom/larvae_1/ds_h5/scan_0/pred_mip.zarr'
+seeds_path =r'/media/brandon/Data1/Brandon/fly_immune/Serenity/2022_08_24_dpt-gfp_silverman_r4-gal4_uas-mcd8-mcherry_ecoli-hs-dtom/larvae_1/ds_h5/scan_0/seeds.zarr'
 #seeds_path = r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2022_02_24_uas-mcd8-gfp_r4-gal4_x_dipt_dtom2/ecoli_hs_gfp/larvae_1/ds_h5/scan_0/manual_seeds_mip.zarr'
 
 
-boundaries = da.from_zarr(boundaries_path, chunks=(1, 7723, 2548))
-seeds = da.from_zarr(seeds_path, chunks=(1, 7723, 2548))
+# boundaries = da.from_zarr(boundaries_path, chunks=(7723, 2548))
+# seeds = da.from_zarr(seeds_path, chunks=(1, 7723, 2548))
+# seeds = da.squeeze(seeds)
+
+boundaries = da.from_zarr(boundaries_path)
+seeds = da.from_zarr(seeds_path)
+seeds = da.squeeze(seeds)
 
 #labels = da.map_overlap(watershed, boundaries, seeds, depth={0: 0, 1: 1, 2: 0})
 labels = da.map_blocks(watershed, boundaries, seeds)
