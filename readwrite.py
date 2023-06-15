@@ -22,6 +22,10 @@ import yaml
 from pytorch3dunet.unet3d.model import get_model
 import torch
 from dask.diagnostics import ProgressBar
+import ome_zarr.scale
+import ome_zarr.writer
+import ome_zarr.io
+
 
 def extract_coords(im_bio):
     """extract xyz stage coordinates from a Bioformats Reader object"""
@@ -183,9 +187,9 @@ def get_file_number_from_tvs(id_tree, t, v, s):
 
 
 def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, num_time_points, num_views, num_sheets, namestr,
-                                     core_name, suffix=r'.czi', chunk_sizes=(1, 64, 256, 256),
-                                    pyramid_scales=5, reversed_y = False, stage_positions=None, sx=1920, sy=1920,
-                                           dtype='uint16', num_channels=2):
+                                     core_name, suffix=r'.czi', chunk_sizes=None,
+                                    pyramid_scales=5, reversed_y=False, stage_positions=None, sx=1920, sy=1920,
+                                           dtype='uint16', num_channels=2, sheet_correction=('green', 'red')):
     """function to read in a folder of czi files, compute fusion + registration, then save as ome-zarr with prescribed chunking and pyramiding. Assumes file structure:
     each czi file can contain multiple channels, but different sheets, views, and timepoints are separate files. Pyramid computation based on code by Jordao Bragantini.
 
@@ -199,9 +203,9 @@ def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, nu
     if stage_positions is None:
         # get info from first file
         first_file = zeiss_filename(core_name, suffix, 0)
-        #first_img = AICSImage(path_to_czi_dir + '/' + first_file, reader=readers.bioformats_reader.BioformatsReader)
+        first_img = AICSImage(path_to_czi_dir + '/' + first_file, reader=readers.bioformats_reader.BioformatsReader)
         # trying a new way where I manually copy the 0th .czi file to parent directory, to see if this avoids memory issue
-        first_img = AICSImage(Path(path_to_czi_dir).parent.__str__() + '/' + first_file, reader=readers.bioformats_reader.BioformatsReader)
+        #first_img = AICSImage(Path(path_to_czi_dir).parent.__str__() + '/' + first_file, reader=readers.bioformats_reader.BioformatsReader)
 
         # coordinates of each view --- doing maually now to avoid remaking first_img
         """extract xyz stage coordinates from a Bioformats Reader object"""
@@ -260,6 +264,11 @@ def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, nu
     assert num_files == num_time_points * num_views * num_sheets
     id_tree = create_file_id_hierarchy(num_time_points, num_views, num_sheets)
 
+    # default chunks: single z planes
+    if chunk_sizes is None:
+        # zarr bug: numpy int64 in chunk sizes gives error. casting as plain int instead.
+        chunk_sizes = (1, 1, 1, int(big_shape[1]), int(big_shape[2]))
+
     # create temporary zarr on disk for registering big stack that we will overwrite and then delete
     tmp_zarr_path = Path(path_to_new_zarr).parent / 'tmp.zarr'
     tmp_zarr = zarr.open(tmp_zarr_path.__str__(), 'w')      # overwritttttttte!
@@ -289,28 +298,28 @@ def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, nu
             file_number = get_file_number_from_tvs(id_tree, t, v, s)
             this_file_name = zeiss_filename(core_name, suffix, file_number)
             img_0 = AICSImage(path_to_czi_dir + '/' + this_file_name)
-            #sheet_0 = img.get_image_data("CZYX", T=0).astype(np.uint32)
 
             # sheet_1. assumes same dims as sheet_0.
             s = 1
             file_number = get_file_number_from_tvs(id_tree, t, v, s)
             this_file_name = zeiss_filename(core_name, suffix, file_number)
             img_1 = AICSImage(path_to_czi_dir + '/' + this_file_name)
-            #sheet_1 = img.get_image_data("CZYX", T=0).astype(np.uint32)
 
             # fuse
             mean_sheet = (img_0.get_image_data("CZYX", T=0).astype(np.uint32) +
                           img_1.get_image_data("CZYX", T=0).astype(np.uint32)) * 0.5
 
             # rescale red channel
-            sheet_correction_stack = np.repeat(sheet_correction_red, mean_sheet[1].shape[0], axis=0)
-            mean_sheet[1] = mean_sheet[1] / sheet_correction_stack
-            mean_sheet = mean_sheet.astype(np.uint16)
+            if sheet_correction is not None:
+                if 'red' in sheet_correction:
+                    sheet_correction_stack = np.repeat(sheet_correction_red, mean_sheet[0].shape[0], axis=0)
+                    mean_sheet[1] = mean_sheet[1] / sheet_correction_stack
 
-            # rescale green channel
-            sheet_correction_stack = np.repeat(sheet_correction_green, mean_sheet[1].shape[0], axis=0)
-            mean_sheet[0] = mean_sheet[0] / sheet_correction_stack
-            mean_sheet = mean_sheet.astype(np.uint16)
+                if 'green' in sheet_correction:
+                    # rescale green channel
+                    sheet_correction_stack = np.repeat(sheet_correction_green, mean_sheet[0].shape[0], axis=0)
+                    mean_sheet[0] = mean_sheet[0] / sheet_correction_stack
+                    mean_sheet = mean_sheet.astype(np.uint16)
 
             # remove top part of image
             if v > 0:
@@ -333,19 +342,12 @@ def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, nu
             #print('error with time point' + str(t) + ', skipping')
             #continue
 
-
-    # crop out black
-    #slicing = get_nonzero_slicing_range_ome(tmp_zarr_path.__str__(), 'tmp_big_stack')
-    #crop_padding(tmp_zarr_path.__str__(), slicing=slicing)
-
     # compute pyramid structure
     print("creating pyramid structure")
-    # create output ome-zarr
-    #path_to_crop_zarr = tmp_zarr_path.parent / 'tmp.crop.zarr'
-    #root = create_pyramid_from_zarr(tmp_zarr_path.__str__(), 'tmp_big_stack', path_to_new_zarr, pyramid_scales, chunk_sizes)
+    create_pyramid_from_zarr(tmp_zarr_path / 'tmp_big_stack', path_to_new_zarr, pyramid_scales, chunk_sizes)
     print("done!")
 
-    return #root
+    return
 
 
 def crop_padding(tmp_zarr_path, slicing=None):
@@ -418,44 +420,72 @@ def crop_padding(tmp_zarr_path, slicing=None):
 #     return root
 
 
-def create_pyramid_from_zarr(path_to_plain_zarr, group_name, path_to_new_zarr, pyramid_scales, chunk_sizes=None):
-    """ assumes TCZYX array structure"""
-    store = zarr.DirectoryStore(path_to_new_zarr)
-    root: zarr.Group = zarr.group(store=store, overwrite=False)
+# def create_pyramid_from_zarr(path_to_plain_zarr, group_name, path_to_new_zarr, pyramid_scales, chunk_sizes=None):
+#     """ assumes TCZYX array structure"""
+#     store = zarr.DirectoryStore(path_to_new_zarr)
+#     root: zarr.Group = zarr.group(store=store, overwrite=False)
+#
+#     plain = zarr.open(path_to_plain_zarr, 'r')
+#     arr = plain.get(group_name)
+#     arr_shape = arr.shape
+#     num_time_points = arr_shape[0]
+#     num_channels = arr_shape[1]
+#     num_slices = arr_shape[2]
+#     if chunk_sizes is None:
+#         chunk_sizes = arr.chunks
+#
+#     for t in range(num_time_points):
+#         for c in range(num_channels):
+#             for zslice in range(num_slices):
+#                 print('t: ' + str(t) + 'c: ' + str(c) + 'making pyramid for z = ' + str(zslice))
+#                 region = arr[t, c, zslice]
+#                 pyramid = pyramid_gaussian(
+#                     cp.asarray(region),
+#                     max_layer=pyramid_scales - 1,
+#                     downscale=2,
+#                     preserve_range=True,
+#                 )
+#
+#                 for i, im in enumerate(pyramid):
+#                     if zslice == 0 and t == 0 and c == 0:
+#                         root.create_dataset(
+#                             str(i),
+#                             shape=(num_time_points, num_channels, num_slices, *im.shape),
+#                             dtype=region.dtype,
+#                             chunks=chunk_sizes,
+#                         )
+#
+#                     root[str(i)][t, c, zslice] = im.get()
+#
+#     return root
 
-    plain = zarr.open(path_to_plain_zarr, 'r')
-    arr = plain.get(group_name)
-    arr_shape = arr.shape
-    num_time_points = arr_shape[0]
-    num_channels = arr_shape[1]
-    num_slices = arr_shape[2]
-    if chunk_sizes is None:
-        chunk_sizes = arr.chunks
+def create_pyramid_from_zarr(path_to_plain_zarr, path_to_ome_zarr, pyramid_scales=5, chunk_size=None):
+    data = da.from_zarr(path_to_plain_zarr)
 
-    for t in range(num_time_points):
-        for c in range(num_channels):
-            for zslice in range(num_slices):
-                print('t: ' + str(t) + 'c: ' + str(c) + 'making pyramid for z = ' + str(zslice))
-                region = arr[t, c, zslice]
-                pyramid = pyramid_gaussian(
-                    cp.asarray(region),
-                    max_layer=pyramid_scales - 1,
-                    downscale=2,
-                    preserve_range=True,
-                )
+    if len(data.shape) == 3:
+        data = da.reshape(data, (1, 1,) + data.shape)
+    elif len(data.shape) == 4:
+        data = da.reshape(data, (1,) + data.shape)
 
-                for i, im in enumerate(pyramid):
-                    if zslice == 0 and t == 0 and c == 0:
-                        root.create_dataset(
-                            str(i),
-                            shape=(num_time_points, num_channels, num_slices, *im.shape),
-                            dtype=region.dtype,
-                            chunks=chunk_sizes,
-                        )
+    if chunk_size is not None:
+        data = da.rechunk(data, chunks=chunk_size)
 
-                    root[str(i)][t, c, zslice] = im.get()
+    # code copied from Constantine Pape's tutorial, but using "nearest" algorithm, which is currently the only one that
+    # works with dask arrays
+    scaler = ome_zarr.scale.Scaler()
+    scaler.max_layer = pyramid_scales - 1
+    multi_scale_image = scaler.nearest(data)
 
-    return root
+    # create the new ome zarr file
+    loc = ome_zarr.io.parse_url(path_to_ome_zarr, mode="w-")
+
+    # create a zarr root level group at the file path
+    group = zarr.group(loc.store, overwrite=True)
+
+    # write the actual data
+    ome_zarr.writer.write_multiscale(multi_scale_image, group)
+
+    return
 
 
 # def compute_output_slicing(
