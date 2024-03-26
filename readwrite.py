@@ -5,12 +5,12 @@ from aicsimageio import AICSImage, readers
 import zarr
 import glob
 import dask.array as da
-from matplotlib.pyplot import imread
-from dexp.datasets import ZDataset
+from skimage.io import imread
+#from dexp.datasets import ZDataset
 #from tqdm import tqdm
 from pathlib import Path
 import os
-import h5py
+#import h5py
 from itertools import product
 from typing import Iterator, Tuple
 import cupy as cp
@@ -19,12 +19,16 @@ from cucim.skimage.transform.pyramids import _check_factor
 import math
 from scipy.optimize import least_squares
 import yaml
-from pytorch3dunet.unet3d.model import get_model
-import torch
+#from pytorch3dunet.unet3d.model import get_model
+#import torch
 from dask.diagnostics import ProgressBar
 import ome_zarr.scale
 import ome_zarr.writer
 import ome_zarr.io
+from zarr.storage import DirectoryStore
+from ome_zarr.scale import Scaler
+from typing import List
+from skimage.transform import downscale_local_mean
 
 
 def extract_coords(im_bio):
@@ -67,101 +71,101 @@ def zeiss_filename(core_name, suffix, iteration):
     return out_name
 
 
-def convert_czi_views_to_zarr(path_to_czi_dir, path_to_new_zarr, num_time_points, num_views, num_sheets, namestr,
-                              core_name, suffix=r'.czi', chunk_sizes=(1, 64, 256, 256), channel_names=None):
-    """function to read in a folder of czi files then save as zarr with prescribed chunking. Assumes file structure:
-    each czi file can contain multiple channels, but different sheets, views, and timepoints are separate files.
-
-    Notes:   """
-
-    # get file names in czi dir
-    filenames = glob.glob(path_to_czi_dir + '/' + namestr)
-    num_files = len(filenames)
-
-    # if no channel names are provided, get them from AICSImage
-    if channel_names is None:
-        # get channel names from first file
-        first_file = zeiss_filename(core_name, suffix, 0)
-        img = AICSImage(path_to_czi_dir + '/' + first_file, reader=readers.bioformats_reader.BioformatsReader)
-        channel_names = img.channel_names
-
-    # create file_id_tree used to pick the right image files
-    assert num_files == num_time_points * num_views * num_sheets
-    id_tree = create_file_id_hierarchy(num_time_points, num_views, num_sheets)
-
-    # create zarr
-    root = zarr.open(path_to_new_zarr, mode='w-')
-    for t in range(num_time_points):
-        time = root.create_group('Time' + str(t))
-        for v in range(num_views):
-            view = time.create_group('View' + str(v))
-            for s in range(num_sheets):
-                sheet = view.create_group('Sheet' + str(s))
-                file_number = get_file_number_from_tvs(id_tree, t, v, s)
-                this_file_name = zeiss_filename(core_name, suffix, file_number)
-                img = AICSImage(path_to_czi_dir + '/' + this_file_name)
-                this_data = img.get_image_dask_data("CZYX", T=0)
-                this_data.rechunk(chunk_sizes)
-                arr = sheet.create(name='multi_channel', shape=this_data.shape)
-                da.to_zarr(this_data, arr)
-                # for c in range(len(channel_names)):
-                #     this_data = img.get_image_dask_data("ZYX", C=c, T=0)
-                #     this_data.rechunk(chunk_sizes)
-                #     arr = sheet.create(name=channel_names[c], shape=this_data.shape)
-                #     da.to_zarr(this_data, arr)
-
-    return root
-
-
-def convert_tiffs_to_zarr(im_dir, path_to_new_zarr, chunk_sizes=(1, 64, 256, 256)):
-    """convert folder of tiffs to zarr. just for testing registration for now, not ideal as long term system. assumes a dir structure"""
-    # create zarr
-    root = zarr.open(path_to_new_zarr, mode='w-')
-
-    # get regions
-    region_dirs = glob.glob(im_dir + '/region*')
-
-    # loop
-    for r in range(len(region_dirs)):
-        print("collecting view " + str(r) + ' of ' + str(len(region_dirs) - 1))
-
-        # create group in zarr
-        view = root.create_group("View" + str(r))
-
-        # get sheets (illuminations)
-        this_region_dir = region_dirs[r]
-        sheet_dirs = glob.glob(this_region_dir + '/sheet*')
-
-        for s in range(len(sheet_dirs)):
-            # create group in zarr
-            sheet = view.create_group("Sheet" + str(s))
-
-            # get channels
-            this_sheet_dir = sheet_dirs[s]
-            channel_dirs = glob.glob(this_sheet_dir + '/c*')
-
-            for c in range(len(channel_dirs)):
-
-                # get z slices
-                this_channel_dir = channel_dirs[c]
-                slices = glob.glob(this_channel_dir + '/*.tif')
-
-                for z in range(len(slices)):
-                    # read tiff
-                    this_im = imread(slices[z])
-                    if z == 0:
-                        # create group in zarr
-                        # channel = sheet.create("Channel" + str(c), shape=(len(slices), this_im.shape[0], this_im.shape[1]))
-                        im_stack = np.zeros((len(slices), this_im.shape[0], this_im.shape[1]))
-                    im_stack[z] = this_im
-
-                if len(slices) > 0:
-                    im_stack_da = da.array(im_stack)
-                    im_stack_da.rechunk(chunk_sizes)
-                    channel = sheet.create(name="Channel" + str(c), shape=im_stack_da.shape)
-                    da.to_zarr(im_stack_da, channel)
-
-    return root
+# def convert_czi_views_to_zarr(path_to_czi_dir, path_to_new_zarr, num_time_points, num_views, num_sheets, namestr,
+#                               core_name, suffix=r'.czi', chunk_sizes=(1, 64, 256, 256), channel_names=None):
+#     """function to read in a folder of czi files then save as zarr with prescribed chunking. Assumes file structure:
+#     each czi file can contain multiple channels, but different sheets, views, and timepoints are separate files.
+#
+#     Notes:   """
+#
+#     # get file names in czi dir
+#     filenames = glob.glob(path_to_czi_dir + '/' + namestr)
+#     num_files = len(filenames)
+#
+#     # if no channel names are provided, get them from AICSImage
+#     if channel_names is None:
+#         # get channel names from first file
+#         first_file = zeiss_filename(core_name, suffix, 0)
+#         img = AICSImage(path_to_czi_dir + '/' + first_file, reader=readers.bioformats_reader.BioformatsReader)
+#         channel_names = img.channel_names
+#
+#     # create file_id_tree used to pick the right image files
+#     assert num_files == num_time_points * num_views * num_sheets
+#     id_tree = create_file_id_hierarchy(num_time_points, num_views, num_sheets)
+#
+#     # create zarr
+#     root = zarr.open(path_to_new_zarr, mode='w-')
+#     for t in range(num_time_points):
+#         time = root.create_group('Time' + str(t))
+#         for v in range(num_views):
+#             view = time.create_group('View' + str(v))
+#             for s in range(num_sheets):
+#                 sheet = view.create_group('Sheet' + str(s))
+#                 file_number = get_file_number_from_tvs(id_tree, t, v, s)
+#                 this_file_name = zeiss_filename(core_name, suffix, file_number)
+#                 img = AICSImage(path_to_czi_dir + '/' + this_file_name)
+#                 this_data = img.get_image_dask_data("CZYX", T=0)
+#                 this_data.rechunk(chunk_sizes)
+#                 arr = sheet.create(name='multi_channel', shape=this_data.shape)
+#                 da.to_zarr(this_data, arr)
+#                 # for c in range(len(channel_names)):
+#                 #     this_data = img.get_image_dask_data("ZYX", C=c, T=0)
+#                 #     this_data.rechunk(chunk_sizes)
+#                 #     arr = sheet.create(name=channel_names[c], shape=this_data.shape)
+#                 #     da.to_zarr(this_data, arr)
+#
+#     return root
+#
+#
+# def convert_tiffs_to_zarr(im_dir, path_to_new_zarr, chunk_sizes=(1, 64, 256, 256)):
+#     """convert folder of tiffs to zarr. just for testing registration for now, not ideal as long term system. assumes a dir structure"""
+#     # create zarr
+#     root = zarr.open(path_to_new_zarr, mode='w-')
+#
+#     # get regions
+#     region_dirs = glob.glob(im_dir + '/region*')
+#
+#     # loop
+#     for r in range(len(region_dirs)):
+#         print("collecting view " + str(r) + ' of ' + str(len(region_dirs) - 1))
+#
+#         # create group in zarr
+#         view = root.create_group("View" + str(r))
+#
+#         # get sheets (illuminations)
+#         this_region_dir = region_dirs[r]
+#         sheet_dirs = glob.glob(this_region_dir + '/sheet*')
+#
+#         for s in range(len(sheet_dirs)):
+#             # create group in zarr
+#             sheet = view.create_group("Sheet" + str(s))
+#
+#             # get channels
+#             this_sheet_dir = sheet_dirs[s]
+#             channel_dirs = glob.glob(this_sheet_dir + '/c*')
+#
+#             for c in range(len(channel_dirs)):
+#
+#                 # get z slices
+#                 this_channel_dir = channel_dirs[c]
+#                 slices = glob.glob(this_channel_dir + '/*.tif')
+#
+#                 for z in range(len(slices)):
+#                     # read tiff
+#                     this_im = imread(slices[z])
+#                     if z == 0:
+#                         # create group in zarr
+#                         # channel = sheet.create("Channel" + str(c), shape=(len(slices), this_im.shape[0], this_im.shape[1]))
+#                         im_stack = np.zeros((len(slices), this_im.shape[0], this_im.shape[1]))
+#                     im_stack[z] = this_im
+#
+#                 if len(slices) > 0:
+#                     im_stack_da = da.array(im_stack)
+#                     im_stack_da.rechunk(chunk_sizes)
+#                     channel = sheet.create(name="Channel" + str(c), shape=im_stack_da.shape)
+#                     da.to_zarr(im_stack_da, channel)
+#
+#     return root
 
 
 def create_file_id_hierarchy(num_time_points, num_views, num_sheets):
@@ -189,11 +193,12 @@ def get_file_number_from_tvs(id_tree, t, v, s):
 def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, num_time_points, num_views, num_sheets, namestr,
                                      core_name, suffix=r'.czi', chunk_sizes=None,
                                     pyramid_scales=5, reversed_y=False, stage_positions=None, sx=1920, sy=1920,
-                                           dtype='uint16', num_channels=2, sheet_correction=('green', 'red')):
+                                           dtype='uint16', num_channels=2, sheet_correction=None):
     """function to read in a folder of czi files, compute fusion + registration, then save as ome-zarr with prescribed chunking and pyramiding. Assumes file structure:
-    each czi file can contain multiple channels, but different sheets, views, and timepoints are separate files. Pyramid computation based on code by Jordao Bragantini.
+    each czi file can contain multiple channels, but different sheets, views, and timepoints are separate files.
 
-    Notes:   NEED TO TEST"""
+    Notes:   NEED TO TEST.
+            9/8/23: sheet_correction now needs to be a dict of the form {'channel': axis_number}, i.e., {'green': 0, 'red': 1} """
 
     # get file names in czi dir
     filenames = glob.glob(path_to_czi_dir + '/' + namestr)
@@ -279,14 +284,28 @@ def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, nu
     # red
     I0, xc, yc, xR, sigma_y = load_best_fit_sheet_params(color='red')
     ygrid, xgrid = np.indices((sy, sx))
-    sheet_correction = sheet_intensity(xgrid, ygrid, I0, xc, yc, xR, sigma_y)
-    sheet_correction_red = np.expand_dims(sheet_correction / np.max(sheet_correction), axis=0)
+    # sheet intensity assumes a 1980 x 1980 grid. if using a centered ROI, shift the grid
+    if sy < 1980:
+        start_y = int((1980 - sy) / 2)
+        ygrid = ygrid + start_y
+    if sy < 1980:
+        start_x = int((1980 - sx) / 2)
+        xgrid = xgrid + start_x
+    sheet_correction_arr = sheet_intensity(xgrid, ygrid, I0, xc, yc, xR, sigma_y)
+    sheet_correction_red = np.expand_dims(sheet_correction_arr / np.max(sheet_correction_arr), axis=0)
 
     # green
     I0, xc, yc, xR, sigma_y = load_best_fit_sheet_params(color='green')
     ygrid, xgrid = np.indices((sy, sx))
-    sheet_correction = sheet_intensity(xgrid, ygrid, I0, xc, yc, xR, sigma_y)
-    sheet_correction_green = np.expand_dims(sheet_correction / np.max(sheet_correction), axis=0)
+    # sheet intensity assumes a 1980 x 1980 grid. if using an ROI, shift the grid
+    if sy < 1980:
+        start_y = int((1980 - sy) / 2)
+        ygrid = ygrid + start_y
+    if sy < 1980:
+        start_x = int((1980 - sx) / 2)
+        xgrid = xgrid + start_x
+    sheet_correction_arr = sheet_intensity(xgrid, ygrid, I0, xc, yc, xR, sigma_y)
+    sheet_correction_green = np.expand_dims(sheet_correction_arr / np.max(sheet_correction_arr), axis=0)
 
     print("computing fusion and registration")
     for t in range(num_time_points):
@@ -311,16 +330,16 @@ def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, nu
 
             # rescale red channel
             if sheet_correction is not None:
-                if 'red' in sheet_correction:
+                if 'red' in sheet_correction.keys():
                     sheet_correction_stack = np.repeat(sheet_correction_red, mean_sheet[0].shape[0], axis=0)
-                    mean_sheet[1] = mean_sheet[1] / sheet_correction_stack
+                    mean_sheet[sheet_correction['red']] = mean_sheet[sheet_correction['red']] / sheet_correction_stack
 
-                if 'green' in sheet_correction:
+                if 'green' in sheet_correction.keys():
                     # rescale green channel
                     sheet_correction_stack = np.repeat(sheet_correction_green, mean_sheet[0].shape[0], axis=0)
-                    mean_sheet[0] = mean_sheet[0] / sheet_correction_stack
-                    mean_sheet = mean_sheet.astype(np.uint16)
+                    mean_sheet[sheet_correction['green']] = mean_sheet[0] / sheet_correction_stack
 
+            mean_sheet = mean_sheet.astype(np.uint16)
             # remove top part of image
             if v > 0:
                 y_start = sy + y[v - 1] - y[v]
@@ -459,8 +478,8 @@ def crop_padding(tmp_zarr_path, slicing=None):
 #
 #     return root
 
-def create_pyramid_from_zarr(path_to_plain_zarr, path_to_ome_zarr, pyramid_scales=5, chunk_size=None):
-    data = da.from_zarr(path_to_plain_zarr)
+def create_pyramid_from_zarr(path_to_plain_zarr, path_to_ome_zarr, pyramid_scales=5, chunk_size=None, method='local_mean'):
+    data = da.from_zarr(DirectoryStore(path_to_plain_zarr))
 
     if len(data.shape) == 3:
         data = da.reshape(data, (1, 1,) + data.shape)
@@ -472,12 +491,16 @@ def create_pyramid_from_zarr(path_to_plain_zarr, path_to_ome_zarr, pyramid_scale
 
     # code copied from Constantine Pape's tutorial, but using "nearest" algorithm, which is currently the only one that
     # works with dask arrays
-    scaler = ome_zarr.scale.Scaler()
+    #scaler = ome_zarr.scale.DaskScaler()
+    scaler = DaskScaler()
     scaler.max_layer = pyramid_scales - 1
-    multi_scale_image = scaler.nearest(data)
+    if method == 'local_mean':
+        multi_scale_image = scaler.dask_local_mean(data)
+    elif method == 'nearest':
+        multi_scale_image = scaler.nearest(data)
 
-    # create the new ome zarr file
-    loc = ome_zarr.io.parse_url(path_to_ome_zarr, mode="w-")
+    # create the new ome zarr file. Overwrite if already exists!
+    loc = ome_zarr.io.parse_url(path_to_ome_zarr, mode="w")
 
     # create a zarr root level group at the file path
     group = zarr.group(loc.store, overwrite=True)
@@ -486,6 +509,32 @@ def create_pyramid_from_zarr(path_to_plain_zarr, path_to_ome_zarr, pyramid_scale
     ome_zarr.writer.write_multiscale(multi_scale_image, group)
 
     return
+
+
+class DaskScaler(Scaler):
+    """implement local mean downsampling on dask arrays using map blocks"""
+    def dask_local_mean(self,  base: np.ndarray) -> List[np.ndarray]:
+        rv = [base]
+        stack_dims = base.ndim - 2
+        factors = (*(1,) * stack_dims, *(self.downscale, self.downscale))
+        for i in range(self.max_layer):
+            rv.append(dask_downscale_local_mean(rv[-1], factors=factors).astype(base.dtype))
+        return rv
+
+
+def dask_downscale_local_mean(data, factors):
+    # use a map_blocks wrapper around the skimage downscale_local_mean function.
+    # If we can compute the final size of the arrays ahead of time,
+    # I think we can avoid the compute call here and reduce memory usage.
+    # At the moment, without the compute call there
+    # is an error due to dask telling the zarr writer that the size of the
+    # downscaled arrays doesn't change, when they actually do.
+
+    # compute downscaling on one slice to get the output shape. use this to construct a "meta" for the map_blocks call.
+    one_slice = da.map_blocks(downscale_local_mean, data[0, 0, 0], factors=factors[3:]).compute()
+    downscaled_shape = data.shape[:3] + one_slice.shape
+    meta = da.zeros(shape=downscaled_shape, dtype=data.dtype, chunks=(1, 1, 1,) + one_slice.shape)
+    return da.map_blocks(downscale_local_mean, data, factors=factors, meta=meta, chunks=(1, 1, 1,) + one_slice.shape)#.compute()
 
 
 # def compute_output_slicing(
@@ -661,141 +710,141 @@ def check_big_shape(big_shape, x, y, z, view_size, reversed_y=False):
     return
 
 
-def ZDataset_to_hdf5(path_to_zarr, path_to_new_hdf5, channels):
-    ds = ZDataset(path_to_zarr, mode="r-")
-    for channel in channels:
-        data = da.array(ds.get_array(channel))
-        da.to_hdf5(path_to_new_hdf5, '/' + channel, data)
-
-    return
-
-
-def ZDataset_to_individual_hdf5s(path_to_zarr, path_to_new_hdf5_dir, channels, timepoints=None, z_slices=None):
-    """convert part of a ZDataset to a dir of h5 files, one for each z slice."""
-    ds = ZDataset(path_to_zarr, mode="r")
-    for channel in channels:
-        data = da.array(ds.get_array(channel))
-        if timepoints is None:
-            timepoints = range(data.shape[0])
-        if z_slices is None:
-            z_slices = range(data.shape[1])
-        for t in timepoints:
-            print(t)
-            os.mkdir(path_to_new_hdf5_dir + '/scan_' + str(t))
-
-            # note: issue with tqdm and napari
-            #for z in tqdm(z_slices, 'converting slices for time: ' + str(t)):
-            for counter, z in enumerate(z_slices):
-                print(str(counter) + ' of ' + str(len(z_slices)))
-                this_slice = data[t, z]
-                da.to_hdf5(path_to_new_hdf5_dir + '/scan_' + str(t) + '/z_' + str(z) + '.h5', '/' + channel, this_slice)
-
-    return
-
-
-def ome_zarr_to_individual_hdf5s(path_to_zarr, path_to_new_hdf5_dir, channel_numbers, channel_names, timepoints=None, z_slices=None):
-    """convert highest res of ome-zarr to a dir of h5 files, one for each z slice. channel_numbers = list of channel
-    indices in zarr array. channel_names = list, each element the name of the corresponding channel number in
-    channel_numbers."""
-    data = da.from_zarr(path_to_zarr + '/0')
-    if timepoints is None:
-        timepoints = range(data.shape[0])
-    if z_slices is None:
-        z_slices = range(data.shape[2])
-    for t in timepoints:
-        print(t)
-        os.mkdir(path_to_new_hdf5_dir + '/scan_' + str(t))
-        for counter_c, c in enumerate(channel_numbers):
-            for counter_z, z in enumerate(z_slices):
-                print(str(counter_z) + ' of ' + str(len(z_slices)))
-                this_slice = data[t, c, z]
-                da.to_hdf5(path_to_new_hdf5_dir + '/scan_' + str(t) + '/z_' + str(z) + '.h5', '/' + channel_names[counter_c], this_slice)
-
-    return
-
-
-def individual_hdf5s_to_ZDataset(path_to_hdf5_dir, path_to_new_zarr, z_slices, prefix, suffix, dtype):
-    """one timepoint for now"""
-    file_names = glob.glob(path_to_hdf5_dir + '/*.h5')
-    if z_slices is None:
-        z_slices = range(len(file_names))
-
-    ds = ZDataset(path_to_new_zarr, mode='w-')
-
-    # get channel and shape info from first file
-    channels = h5py.File(file_names[0]).keys()
-    for channel in channels:
-        slice_shape = np.squeeze(h5py.File(file_names[0]).get(channel)).shape
-        stack_shape = (1, len(z_slices)) + slice_shape
-        ds.add_channel(channel, shape=stack_shape, dtype=dtype, chunks=(1, 1) + slice_shape)
-        ds.write_array(channel, zarr.zeros(stack_shape))
-
-    # loop over slices and write to ZDataset
-    for channel in channels:
-        this_stack = ds.get_array(channel)
-        for z, z_slice in enumerate(z_slices):
-            print(str(z) + ' of ' + str(len(z_slices)))
-            file_name = path_to_hdf5_dir + '/' + prefix + str(z_slice) + suffix
-            f = h5py.File(file_name)
-            this_stack[0, z] = zarr.array(np.squeeze(f.get(channel)[0]))
-
-    ds.close()
-
-    return
-
-
-def individual_hdf5s_to_zarr(path_to_hdf5_dir, path_to_new_zarr, z_slices, prefix, suffix, dtype):
-    """one timepoint for now. assumes 1 channel"""
-    file_names = glob.glob(path_to_hdf5_dir + '/*.h5')
-    if z_slices is None:
-        z_slices = range(len(file_names))
-
-    # get channel and shape info from first file
-    channels = h5py.File(file_names[0]).keys()
-    slice_shape = np.squeeze(h5py.File(file_names[0]).get(list(channels)[0])).shape   # assumes one channel
-    stack_shape = (1, 1, len(z_slices)) + slice_shape
-    pred_zarr = zarr.open(path_to_new_zarr, 'w-')
-    pred = pred_zarr.create('pred', shape=stack_shape, dtype=dtype, chunks=(1, 1, 1) + slice_shape)
-
-
-    # loop over slices and write to ZDataset
-    #this_stack = pred[0, 0]
-    for z, z_slice in enumerate(z_slices):
-        print(str(z) + ' of ' + str(len(z_slices)))
-        file_name = path_to_hdf5_dir + '/' + prefix + str(z_slice) + suffix
-        f = h5py.File(file_name)
-        print(f.get(list(channels)[0]).shape)
-        #print(this_stack.shape)
-        pred[0, 0, z] = f.get(list(channels)[0])[0, 0]
-
-    return
-
-
-def individual_gasp_hdf5s_to_zarr(path_to_hdf5_dir, path_to_new_zarr, z_slices, prefix, suffix, dtype):
-    """one timepoint for now. assumes 1 channel"""
-    file_names = glob.glob(path_to_hdf5_dir + '/z*.h5')
-    if z_slices is None:
-        z_slices = range(len(file_names))
-
-    # get channel and shape info from first file
-    channels = h5py.File(file_names[0]).keys()
-    slice_shape = np.squeeze(h5py.File(file_names[0]).get(list(channels)[0])).shape   # assumes one channel
-    stack_shape = (1, 1, len(z_slices)) + slice_shape
-    gasp_zarr = zarr.open(path_to_new_zarr, 'w-')
-    gasp = gasp_zarr.create('gasp', shape=stack_shape, dtype=dtype, chunks=(1, 1, 1) + slice_shape)
-
-
-    # loop over slices and write to ZDataset
-    #this_stack = pred[0, 0]
-    for z, z_slice in enumerate(z_slices):
-        print(str(z) + ' of ' + str(len(z_slices)))
-        file_name = path_to_hdf5_dir + '/' + prefix + str(z_slice) + suffix
-        f = h5py.File(file_name)
-        print(f.get(list(channels)[0]).shape)
-        #print(this_stack.shape)
-        gasp[0, 0, z] = f.get(list(channels)[0])[0]
-
-    return
+# def ZDataset_to_hdf5(path_to_zarr, path_to_new_hdf5, channels):
+#     ds = ZDataset(path_to_zarr, mode="r-")
+#     for channel in channels:
+#         data = da.array(ds.get_array(channel))
+#         da.to_hdf5(path_to_new_hdf5, '/' + channel, data)
+#
+#     return
+#
+#
+# def ZDataset_to_individual_hdf5s(path_to_zarr, path_to_new_hdf5_dir, channels, timepoints=None, z_slices=None):
+#     """convert part of a ZDataset to a dir of h5 files, one for each z slice."""
+#     ds = ZDataset(path_to_zarr, mode="r")
+#     for channel in channels:
+#         data = da.array(ds.get_array(channel))
+#         if timepoints is None:
+#             timepoints = range(data.shape[0])
+#         if z_slices is None:
+#             z_slices = range(data.shape[1])
+#         for t in timepoints:
+#             print(t)
+#             os.mkdir(path_to_new_hdf5_dir + '/scan_' + str(t))
+#
+#             # note: issue with tqdm and napari
+#             #for z in tqdm(z_slices, 'converting slices for time: ' + str(t)):
+#             for counter, z in enumerate(z_slices):
+#                 print(str(counter) + ' of ' + str(len(z_slices)))
+#                 this_slice = data[t, z]
+#                 da.to_hdf5(path_to_new_hdf5_dir + '/scan_' + str(t) + '/z_' + str(z) + '.h5', '/' + channel, this_slice)
+#
+#     return
+#
+#
+# def ome_zarr_to_individual_hdf5s(path_to_zarr, path_to_new_hdf5_dir, channel_numbers, channel_names, timepoints=None, z_slices=None):
+#     """convert highest res of ome-zarr to a dir of h5 files, one for each z slice. channel_numbers = list of channel
+#     indices in zarr array. channel_names = list, each element the name of the corresponding channel number in
+#     channel_numbers."""
+#     data = da.from_zarr(path_to_zarr + '/0')
+#     if timepoints is None:
+#         timepoints = range(data.shape[0])
+#     if z_slices is None:
+#         z_slices = range(data.shape[2])
+#     for t in timepoints:
+#         print(t)
+#         os.mkdir(path_to_new_hdf5_dir + '/scan_' + str(t))
+#         for counter_c, c in enumerate(channel_numbers):
+#             for counter_z, z in enumerate(z_slices):
+#                 print(str(counter_z) + ' of ' + str(len(z_slices)))
+#                 this_slice = data[t, c, z]
+#                 da.to_hdf5(path_to_new_hdf5_dir + '/scan_' + str(t) + '/z_' + str(z) + '.h5', '/' + channel_names[counter_c], this_slice)
+#
+#     return
+#
+#
+# def individual_hdf5s_to_ZDataset(path_to_hdf5_dir, path_to_new_zarr, z_slices, prefix, suffix, dtype):
+#     """one timepoint for now"""
+#     file_names = glob.glob(path_to_hdf5_dir + '/*.h5')
+#     if z_slices is None:
+#         z_slices = range(len(file_names))
+#
+#     ds = ZDataset(path_to_new_zarr, mode='w-')
+#
+#     # get channel and shape info from first file
+#     channels = h5py.File(file_names[0]).keys()
+#     for channel in channels:
+#         slice_shape = np.squeeze(h5py.File(file_names[0]).get(channel)).shape
+#         stack_shape = (1, len(z_slices)) + slice_shape
+#         ds.add_channel(channel, shape=stack_shape, dtype=dtype, chunks=(1, 1) + slice_shape)
+#         ds.write_array(channel, zarr.zeros(stack_shape))
+#
+#     # loop over slices and write to ZDataset
+#     for channel in channels:
+#         this_stack = ds.get_array(channel)
+#         for z, z_slice in enumerate(z_slices):
+#             print(str(z) + ' of ' + str(len(z_slices)))
+#             file_name = path_to_hdf5_dir + '/' + prefix + str(z_slice) + suffix
+#             f = h5py.File(file_name)
+#             this_stack[0, z] = zarr.array(np.squeeze(f.get(channel)[0]))
+#
+#     ds.close()
+#
+#     return
+#
+#
+# def individual_hdf5s_to_zarr(path_to_hdf5_dir, path_to_new_zarr, z_slices, prefix, suffix, dtype):
+#     """one timepoint for now. assumes 1 channel"""
+#     file_names = glob.glob(path_to_hdf5_dir + '/*.h5')
+#     if z_slices is None:
+#         z_slices = range(len(file_names))
+#
+#     # get channel and shape info from first file
+#     channels = h5py.File(file_names[0]).keys()
+#     slice_shape = np.squeeze(h5py.File(file_names[0]).get(list(channels)[0])).shape   # assumes one channel
+#     stack_shape = (1, 1, len(z_slices)) + slice_shape
+#     pred_zarr = zarr.open(path_to_new_zarr, 'w-')
+#     pred = pred_zarr.create('pred', shape=stack_shape, dtype=dtype, chunks=(1, 1, 1) + slice_shape)
+#
+#
+#     # loop over slices and write to ZDataset
+#     #this_stack = pred[0, 0]
+#     for z, z_slice in enumerate(z_slices):
+#         print(str(z) + ' of ' + str(len(z_slices)))
+#         file_name = path_to_hdf5_dir + '/' + prefix + str(z_slice) + suffix
+#         f = h5py.File(file_name)
+#         print(f.get(list(channels)[0]).shape)
+#         #print(this_stack.shape)
+#         pred[0, 0, z] = f.get(list(channels)[0])[0, 0]
+#
+#     return
+#
+#
+# def individual_gasp_hdf5s_to_zarr(path_to_hdf5_dir, path_to_new_zarr, z_slices, prefix, suffix, dtype):
+#     """one timepoint for now. assumes 1 channel"""
+#     file_names = glob.glob(path_to_hdf5_dir + '/z*.h5')
+#     if z_slices is None:
+#         z_slices = range(len(file_names))
+#
+#     # get channel and shape info from first file
+#     channels = h5py.File(file_names[0]).keys()
+#     slice_shape = np.squeeze(h5py.File(file_names[0]).get(list(channels)[0])).shape   # assumes one channel
+#     stack_shape = (1, 1, len(z_slices)) + slice_shape
+#     gasp_zarr = zarr.open(path_to_new_zarr, 'w-')
+#     gasp = gasp_zarr.create('gasp', shape=stack_shape, dtype=dtype, chunks=(1, 1, 1) + slice_shape)
+#
+#
+#     # loop over slices and write to ZDataset
+#     #this_stack = pred[0, 0]
+#     for z, z_slice in enumerate(z_slices):
+#         print(str(z) + ' of ' + str(len(z_slices)))
+#         file_name = path_to_hdf5_dir + '/' + prefix + str(z_slice) + suffix
+#         f = h5py.File(file_name)
+#         print(f.get(list(channels)[0]).shape)
+#         #print(this_stack.shape)
+#         gasp[0, 0, z] = f.get(list(channels)[0])[0]
+#
+#     return
 
 
 def fit_sheet(data):
@@ -837,76 +886,76 @@ def load_best_fit_sheet_params(color):
 
 
 
-def load_plantseg_model(model_path=r'/home/brandon/Documents/Code/immune-fly/2dunet_bce_dice_ds3x'):
-    config_path = model_path + '/config_train.yml'
-    with open(config_path, 'r') as f:
-        config = yaml.load(f, Loader=yaml.FullLoader)
-    model_config = config.pop('model')
-    model = get_model(model_config)
-
-    return model
-
-
-def plantseg_predict(chunk, model):
-    chunk = chunk[0]
-    #chunk = normalize_std(normalize_0_255(chunk))
-    if chunk.shape[0] > 1:
-        t = torch.tensor(chunk.astype('float32'), device='cuda')
-        t = torch.unsqueeze(torch.unsqueeze(torch.unsqueeze(t, dim=0), dim=0), dim=0)
-        # call model in test model
-        with torch.no_grad():
-            t = model(t)
-
-        t = np.array(t.cpu()).squeeze()
-        t = np.expand_dims(t, axis=0)
-    else:
-        t = np.expand_dims(chunk, axis=0)
-
-    return t
-
-
-def run_plantseg_predict(path_to_zarr, channel, path_to_pred):
-    im = zarr.open(path_to_zarr, 'r')[:, channel]
-    model = load_plantseg_model()
-    model = model.to('cuda')
-
-    for t in range(im.shape[0]):
-        print(f't = {t}')
-        im_da = da.from_array(im[t, 100:110], chunks=(1, 256, 256))
-        prediction = da.map_blocks(plantseg_predict, im_da, model, dtype='float32')
-        #prediction = da.map_overlap(plantseg_predict, im_da, depth=(1, 80, 80), model=model, dtype='float32')
-        with ProgressBar():
-            prediction.to_zarr(path_to_pred)
-
-    return
-
-
-def normalize_01(data: np.array) -> np.array:
-    """
-    copied from plantseg. normalize a numpy array between 0 and 1
-    """
-    return (data - np.min(data)) / (np.max(data) - np.min(data) + 1e-12).astype('float32')
-
-
-def normalize_m11(data: np.array) -> np.array:
-    """
-    copied from plantseg. normalize a numpy array between -1 and 1
-    """
-    return 2 * normalize_01(data) - 1
-
-
-def normalize_0_255(data: np.array) -> np.array:
-    """
-    copied from plantseg. normalize a numpy array between -1 and 1
-    """
-    return (255 * normalize_01(data)).astype('uint8')
-
-
-def normalize_std(data):
-    data = np.float32(data)
-    mean = np.mean(data)
-    std = np.std(data)
-    return (data - mean) / np.clip(std, a_min=1e-12, a_max=None)
+# def load_plantseg_model(model_path=r'/home/brandon/Documents/Code/immune-fly/2dunet_bce_dice_ds3x'):
+#     config_path = model_path + '/config_train.yml'
+#     with open(config_path, 'r') as f:
+#         config = yaml.load(f, Loader=yaml.FullLoader)
+#     model_config = config.pop('model')
+#     model = get_model(model_config)
+#
+#     return model
+#
+#
+# def plantseg_predict(chunk, model):
+#     chunk = chunk[0]
+#     #chunk = normalize_std(normalize_0_255(chunk))
+#     if chunk.shape[0] > 1:
+#         t = torch.tensor(chunk.astype('float32'), device='cuda')
+#         t = torch.unsqueeze(torch.unsqueeze(torch.unsqueeze(t, dim=0), dim=0), dim=0)
+#         # call model in test model
+#         with torch.no_grad():
+#             t = model(t)
+#
+#         t = np.array(t.cpu()).squeeze()
+#         t = np.expand_dims(t, axis=0)
+#     else:
+#         t = np.expand_dims(chunk, axis=0)
+#
+#     return t
+#
+#
+# def run_plantseg_predict(path_to_zarr, channel, path_to_pred):
+#     im = zarr.open(path_to_zarr, 'r')[:, channel]
+#     model = load_plantseg_model()
+#     model = model.to('cuda')
+#
+#     for t in range(im.shape[0]):
+#         print(f't = {t}')
+#         im_da = da.from_array(im[t, 100:110], chunks=(1, 256, 256))
+#         prediction = da.map_blocks(plantseg_predict, im_da, model, dtype='float32')
+#         #prediction = da.map_overlap(plantseg_predict, im_da, depth=(1, 80, 80), model=model, dtype='float32')
+#         with ProgressBar():
+#             prediction.to_zarr(path_to_pred)
+#
+#     return
+#
+#
+# def normalize_01(data: np.array) -> np.array:
+#     """
+#     copied from plantseg. normalize a numpy array between 0 and 1
+#     """
+#     return (data - np.min(data)) / (np.max(data) - np.min(data) + 1e-12).astype('float32')
+#
+#
+# def normalize_m11(data: np.array) -> np.array:
+#     """
+#     copied from plantseg. normalize a numpy array between -1 and 1
+#     """
+#     return 2 * normalize_01(data) - 1
+#
+#
+# def normalize_0_255(data: np.array) -> np.array:
+#     """
+#     copied from plantseg. normalize a numpy array between -1 and 1
+#     """
+#     return (255 * normalize_01(data)).astype('uint8')
+#
+#
+# def normalize_std(data):
+#     data = np.float32(data)
+#     mean = np.mean(data)
+#     std = np.std(data)
+#     return (data - mean) / np.clip(std, a_min=1e-12, a_max=None)
 
 
 def get_mips(dask_array, channel):
