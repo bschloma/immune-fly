@@ -5,12 +5,10 @@ import zarr
 from cucim.skimage.filters import gaussian, frangi, median, sobel, difference_of_gaussians
 from cucim.skimage.morphology import binary_opening, binary_erosion, disk, white_tophat
 from cucim.skimage.measure import label
-from cucim.skimage.segmentation import morphological_geodesic_active_contour
-from dexp.datasets import ZDataset
-import time
 import napari
 from magicgui import magicgui
 from napari.types import ImageData
+from zarr.storage import DirectoryStore
 
 
 def highlight_bacteria(arr, _sigma_blur, _fb_thresh, _sigma_low, _sigma_high, _disk_size, _bacteria_thresh):
@@ -22,10 +20,11 @@ def highlight_bacteria(arr, _sigma_blur, _fb_thresh, _sigma_low, _sigma_high, _d
     arr[arr > _fb_thresh] = 0
     arr = difference_of_gaussians(arr, _sigma_low, _sigma_high)
 
-    if _disk_size > 0:
-        arr = white_tophat(arr, disk(_disk_size))
+    #if _disk_size > 0:
+    #    arr = white_tophat(arr, disk(_disk_size))
 
     arr = arr > _bacteria_thresh
+    arr = binary_opening(arr, disk(_disk_size))
     arr = label(arr)
 
     # reshape into 3D arr
@@ -67,13 +66,11 @@ def magic_func(layer: ImageData, sigma_blur: float = 1.0, thresh: float = 0.04, 
         return gpu_process(layer, sigma_blur, thresh, sigma_low, sigma_high, disk_size, bacteria_thresh)
 
 
-path_to_ds = r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2022_02_24_uas-mcd8-gfp_r4-gal4_x_dipt_dtom2/ecoli_hs_gfp/larvae_4/crop.zarr'
-ds = ZDataset(path_to_ds, 'r')
-mem = ds.get_array('mem-green')
-mem_da = da.from_array(mem[0], chunks=mem.chunks[1:])
+path_to_zarr = r'/media/brandon/Data2/Brandon/fly_immune/Lightsheet_Z1/2024_05_30-dpt-gfp_r4-gal4_ecoli-hs-dtom_4hrs_flow_field/larva_1/im.ome.zarr/0'
+im_da = da.from_zarr(DirectoryStore(path_to_zarr))[0, 0]
 
 # launch napari
-viewer = napari.view_image(mem_da)
+viewer = napari.view_image(im_da)
 
 # Add it to the napari viewer
 viewer.window.add_dock_widget(magic_func)

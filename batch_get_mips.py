@@ -5,28 +5,33 @@ from glob import glob
 from pathlib import Path
 from dask.diagnostics import ProgressBar
 from PIL import Image
+from zarr.storage import DirectoryStore
+
 
 
 experiment_paths = [
-    r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2023_02_16_dpt-gfp_4r-gal4_uas-mcd8-mcherry_ecoli-hs-dtom_24hrs_mid',
-    r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2023_02_24-dpt-gfp_r4-gal4_uas-mcd8-mcherry_noInjCtl_lateL3',
-    r'/media/brandon/Data2/Brandon/fly_immune/Lightsheet_Z1/2023_03_01-dpt-gfp_r4-gal4_uas-mcd8-mcherry_ecoli-hs-dtom_earlyL3_24hrs']
+    r'/media/brandon/Data2/Brandon/fly_immune/Lightsheet_Z1/2025_04_17-PGRP-LC-GFP_pilot',
+    r'/media/brandon/Data2/Brandon/fly_immune/Lightsheet_Z1/2025_06_10_gfp-rel_ecoli-hs-dtom_6hrs']
+
+
 zarr_paths = []
 for path in experiment_paths:
-    larvae_dirs = glob(path + '/larvae*')
+    larvae_dirs = glob(path + '/larva*')
     for larvae_dir in larvae_dirs:
-        zarr_paths.append(Path(larvae_dir) / 'tmp.zarr/tmp_big_stack')
+        zarr_paths.append(Path(larvae_dir) / 'im.ome.zarr/0')
+        #zarr_paths.append(Path(larvae_dir) / 'bacteria.segmentation.ome.zarr/0')
 
 for path in zarr_paths:
-    if not path.is_dir():
-        continue
+    # if not path.is_dir():
+    #     continue
     try:
         # save mips to tiff using PIL
-        mip_dir = Path(path).parent.parent / "mips"
+        mip_dir = Path(path).parent.parent / "mips_0"
         mip_dir.mkdir(exist_ok=True)
+        #mip_dir.mkdir(exist_ok=False)
         mip_dir = mip_dir.__str__()
 
-        data = da.from_zarr(path)
+        data = da.from_zarr(DirectoryStore(path.__str__()))
 
         # green
         with ProgressBar():
@@ -37,6 +42,8 @@ for path in zarr_paths:
             Image.fromarray(this_green_mip).save(mip_dir + '/mip_green' + '_' + str(i) + '.tif')
 
         # red
+        if data.shape[1] == 1:
+            continue
         with ProgressBar():
             red_mip = get_mips(data, channel=1)
 
@@ -44,6 +51,8 @@ for path in zarr_paths:
             this_red_mip = red_mip[i]
             Image.fromarray(this_red_mip).save(mip_dir + '/mip_red' + '_' + str(i) + '.tif')
 
-    except Exception(f'error with {path}'):
+
+    except Exception as e:
+        print(f'Exception: {e}, skipping!')
         continue
 

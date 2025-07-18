@@ -24,6 +24,8 @@ from functools import partial
 from multiprocessing import Pool
 from glob import glob
 from skimage.io import imread
+from PIL import Image
+from readwrite import create_pyramid_from_zarr
 
 
 def init_frangi_params():
@@ -398,10 +400,10 @@ def segment_bacteria(path_to_zarr, path_to_output_labels_zarr, sigma_blur=1.0, b
 
     if dask_label:
         segmentation = zarr.create(store=path_to_output_labels_zarr, shape=im_da.shape,
-                                   chunks=(1, 64, 512, 512), dtype='uint16')
+                                   chunks=(1, 64, 512, 512), dtype='int32')
     else:
         segmentation = zarr.create(store=path_to_output_labels_zarr, shape=im_da.shape,
-                                   chunks=(1, 1, im_da.shape[1], im_da.shape[2]), dtype='uint16')
+                                   chunks=(1, 1, im_da.shape[1], im_da.shape[2]), dtype='int32')
     for t in time_points:
         with ProgressBar():
             single_bacteria_mask = gpu_process_bacteria(im_da[t], sigma_blur, bright_thresh, sigma_low, sigma_high, disk_size, bacteria_thresh).compute()
@@ -462,9 +464,6 @@ def bacteria_mask(arr, sigma_blur, bright_thresh, sigma_low, sigma_high, disk_si
     arr[arr > bright_thresh] = 0
     arr = difference_of_gaussians(arr, sigma_low, sigma_high)
 
-    # if disk_size > 0:
-    #     arr = white_tophat(arr, disk(disk_size))
-
     arr = arr > bacteria_thresh
 
     arr = binary_opening(arr, disk(disk_size))
@@ -503,6 +502,18 @@ def bacteria_aggregate_mask(arr, sigma_blur, disk_size, bacteria_thresh):
     arr = cp.expand_dims(arr, axis=0)
 
     return arr
+
+
+def filter_bacteria_labels(path_to_labels, path_to_filtered_labels, bad_ids):
+    labels = zarr.open(DirectoryStore(path_to_labels), 'r')
+    filtered_labels = zarr.create(store=DirectoryStore(path_to_filtered_labels), shape=labels.shape,
+                          chunks=labels.chunks, dtype=labels.dtype)
+    labels_cp = cp.asarray(labels)
+    for i in tqdm(bad_ids):
+        labels_cp[labels_cp == i] = 0
+
+    filtered_labels[:] = cp.asnumpy(labels_cp)
+    return
 
 
 def initialize_nuclei_dataframe(path_to_segments, dxy, dz, path_to_im=None, voxel_size=(30, 100, 100)):
@@ -706,27 +717,95 @@ def initialize_bacteria_dataframe(path_to_segments, path_to_im, dxy, dz, channel
         rprops = regionprops(seg[t, 0], intensity_image=im[t, channel])
 
         for rprop in tqdm(rprops, desc=f'time {t} of {len(seg) - 1}'):
-            this_dict = dict()
-
-            this_dict['data'] = [rprop['intensity_image']]
-            this_dict['seg_id'] = [rprop['label']]
-            locations = np.int16(rprop['centroid'])
-            this_dict['t'] = [t]
-            this_dict['z'] = [locations[0]]
-            this_dict['y'] = [locations[1]]
-            this_dict['x'] = [locations[2]]
-
-            this_dict['z_um'] = [locations[0] * dz]
-            this_dict['y_um'] = [locations[1] * dxy]
-            this_dict['x_um'] = [locations[2] * dxy]
-
-            this_df = pd.DataFrame.from_dict(this_dict)
-            tmp_dfs.append(this_df)
+            tmp_dfs.append(extract_props(rprop, t=t, dxy=dxy, dz=dz))
 
     df = pd.concat(tmp_dfs, axis=0)
 
     return df
 
+
+def extract_props(rprop, t, dxy, dz):
+    this_dict = dict()
+
+    this_dict['data'] = [rprop['intensity_image']]
+    this_dict['seg_id'] = [rprop['label']]
+    locations = np.int16(rprop['centroid'])
+    this_dict['t'] = [t]
+    this_dict['z'] = [locations[0]]
+    this_dict['y'] = [locations[1]]
+    this_dict['x'] = [locations[2]]
+
+    this_dict['z_um'] = [locations[0] * dz]
+    this_dict['y_um'] = [locations[1] * dxy]
+    this_dict['x_um'] = [locations[2] * dxy]
+
+    this_df = pd.DataFrame.from_dict(this_dict)
+
+    return this_df
+
+
+def make_mips_crop_gut(path_to_zarr, path_to_mips, z_min, z_max, y_min, y_max, channel=1):
+    im = da.from_zarr(DirectoryStore(path_to_zarr))
+    z_axis = len(im.shape) - 3
+    y_axis = len(im.shape) - 2
+
+    if z_min is None:
+        z_min = 0
+    if z_max is None:
+        z_max = im.shape[z_axis]
+    if y_min is None:
+        y_min = 0
+    if y_max is None:
+        y_max = im.shape[y_axis]
+
+    z_min = int(z_min)
+    z_max = int(z_max)
+    y_min = int(y_min)
+    y_max = int(y_max)
+
+    Path(path_to_mips).mkdir(exist_ok=True)
+
+    for t in tqdm(range(im.shape[0])):
+        this_im = im[t, channel]
+        this_im[z_min:z_max, y_min:y_max] = 0
+        this_mip = da.max(this_im, axis=0).compute()
+        Image.fromarray(this_mip).save(path_to_mips + f'/mip_crop_gut_channel{channel}_t{t}.tif')
+
+    return
+
+
+def create_bacteria_density_map(df, path_to_density_ome_zarr, path_to_image_zarr, pyramid_scales=2, method='n_bacteria', downscale=100):
+    im = zarr.open(DirectoryStore(path_to_image_zarr), 'r')
+    shape = im.shape[-3:]
+    shape = (1, 1,) + shape
+    #synchronizer = zarr.ProcessSynchronizer(str(Path(path_to_density_zarr).parent / 'tmp.sync'))
+    tmp_density_zarr_path = str(Path(path_to_density_ome_zarr).parent / 'tmp.density.zarr')
+    out_zarr = zarr.zeros(shape=shape, store=DirectoryStore(tmp_density_zarr_path), dtype='float32', chunks=(1, 1, 1, shape[3], shape[4]))
+    res = df.get(['z', 'y', 'x', method]).values
+    zs = np.unique(res[:, 0])
+    for z in tqdm(zs):
+        these_rows = cp.asarray(res[z == res[:, 0]])
+        this_slice = cp.zeros((shape[3:]))
+        for i in range(len(these_rows)):
+            _, y, x, val = these_rows[i]
+            this_slice[y, x] = val
+        out_zarr[0, 0, z] = this_slice.get()
+
+    create_pyramid_from_zarr(tmp_density_zarr_path, path_to_density_ome_zarr, pyramid_scales=pyramid_scales, method='local_mean', downscale=downscale)
+
+    return
+
+    # func = partial(set_pixel, out_zarr)
+    # with Pool() as pool:
+    #     pool.map(func, tqdm(res))
+    #
+    # return
+
+
+def set_pixel(row, out_zarr):
+    z, y, x, val = row
+    out_zarr[0, 0, z, y, x] = val
+    return
 
 # class WS:
 #     """creating this weird class to use as superpixel generator in elf gasp"""

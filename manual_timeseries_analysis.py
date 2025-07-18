@@ -7,23 +7,24 @@ import pandas as pd
 from pathlib import Path
 
 
-def get_df_from_points(timeseries=False, save_path=None):
+def get_df_from_points(timeseries=False, save_path=None, cell=None):
     points = viewer.layers[-1].data
     df = pd.DataFrame()
     if timeseries:
-        points['t'] = points[:, 0]
+        df['t'] = points[:, 0]
     df['y'] = points[:, 1]
     df['x'] = points[:, 2]
 
     if save_path is not None:
-        df.to_pickle(save_path)
+        df.to_pickle(save_path / f'cell_{cell}.pkl')
 
     return df
 
 
 # load the mips into a numpy array
-path_to_mips = r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2022_02_24_uas-mcd8-gfp_r4-gal4_x_dipt_dtom2/ecoli_hs_gfp/larvae_4/mips'
-save_path = Path(path_to_mips).parent / 'manual_df.pkl'
+path_to_mips = r'/media/brandon/Data2/Brandon/fly_immune/Lightsheet_Z1/2024_02_14_dpt-gfp_ca-Gal4_UAS-His-RFP_halocarbon_5x_timeseries/larva_2/mips'
+save_path = Path(path_to_mips).parent / 'manual_analysis'
+cell = 39
 
 # load green mips
 prefix = r'mip_green_'
@@ -51,6 +52,9 @@ for i in range(num_ims):
         im_arr_red = np.zeros((num_ims, this_im.shape[0], this_im.shape[1]))
     im_arr_red[i] = this_im
 
-viewer = napari.view_image(im_arr_green)
-viewer.add_image(im_arr_red)
+viewer = napari.view_image(im_arr_green, colormap='green', blending='additive', contrast_limits=(0, 30_000))
+viewer.add_image(im_arr_red, colormap='magenta', blending='additive', contrast_limits=(0, 20_000))
+
+# pred = np.array(Image.open(Path(path_to_mips).parent / 'prediction_mip.tif'))
+# viewer.add_image(pred, colormap='blue', blending='additive', contrast_limits=(0, 0.5))
 

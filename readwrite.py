@@ -5,7 +5,7 @@ from aicsimageio import AICSImage, readers
 import zarr
 import glob
 import dask.array as da
-from skimage.io import imread
+#from skimage.io import imread
 #from dexp.datasets import ZDataset
 #from tqdm import tqdm
 from pathlib import Path
@@ -284,12 +284,12 @@ def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, nu
     # red
     I0, xc, yc, xR, sigma_y = load_best_fit_sheet_params(color='red')
     ygrid, xgrid = np.indices((sy, sx))
-    # sheet intensity assumes a 1980 x 1980 grid. if using a centered ROI, shift the grid
-    if sy < 1980:
-        start_y = int((1980 - sy) / 2)
+    # sheet intensity assumes a 1920 x 1920 grid. if using a centered ROI, shift the grid
+    if sy < 1920:
+        start_y = int((1920 - sy) / 2)
         ygrid = ygrid + start_y
-    if sy < 1980:
-        start_x = int((1980 - sx) / 2)
+    if sy < 1920:
+        start_x = int((1920 - sx) / 2)
         xgrid = xgrid + start_x
     sheet_correction_arr = sheet_intensity(xgrid, ygrid, I0, xc, yc, xR, sigma_y)
     sheet_correction_red = np.expand_dims(sheet_correction_arr / np.max(sheet_correction_arr), axis=0)
@@ -297,12 +297,12 @@ def convert_czi_views_to_fuse_reg_ome_zarr(path_to_czi_dir, path_to_new_zarr, nu
     # green
     I0, xc, yc, xR, sigma_y = load_best_fit_sheet_params(color='green')
     ygrid, xgrid = np.indices((sy, sx))
-    # sheet intensity assumes a 1980 x 1980 grid. if using an ROI, shift the grid
-    if sy < 1980:
-        start_y = int((1980 - sy) / 2)
+    # sheet intensity assumes a 1920 x 1920 grid. if using an ROI, shift the grid
+    if sy < 1920:
+        start_y = int((1920 - sy) / 2)
         ygrid = ygrid + start_y
-    if sy < 1980:
-        start_x = int((1980 - sx) / 2)
+    if sy < 1920:
+        start_x = int((1920 - sx) / 2)
         xgrid = xgrid + start_x
     sheet_correction_arr = sheet_intensity(xgrid, ygrid, I0, xc, yc, xR, sigma_y)
     sheet_correction_green = np.expand_dims(sheet_correction_arr / np.max(sheet_correction_arr), axis=0)
@@ -478,7 +478,7 @@ def crop_padding(tmp_zarr_path, slicing=None):
 #
 #     return root
 
-def create_pyramid_from_zarr(path_to_plain_zarr, path_to_ome_zarr, pyramid_scales=5, chunk_size=None, method='local_mean'):
+def create_pyramid_from_zarr(path_to_plain_zarr, path_to_ome_zarr, pyramid_scales=5, chunk_size=None, method='local_mean', downscale=2):
     data = da.from_zarr(DirectoryStore(path_to_plain_zarr))
 
     if len(data.shape) == 3:
@@ -493,6 +493,7 @@ def create_pyramid_from_zarr(path_to_plain_zarr, path_to_ome_zarr, pyramid_scale
     # works with dask arrays
     #scaler = ome_zarr.scale.DaskScaler()
     scaler = DaskScaler()
+    scaler.downscale = downscale
     scaler.max_layer = pyramid_scales - 1
     if method == 'local_mean':
         multi_scale_image = scaler.dask_local_mean(data)

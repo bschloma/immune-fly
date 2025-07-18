@@ -1,9 +1,11 @@
 import pandas as pd
 import numpy as np
 from skimage.morphology import binary_dilation, ball, disk
+from skimage.filters import gaussian
 from multiprocessing import Pool
 from functools import partial
 from tqdm import tqdm
+from skimage.filters import threshold_multiotsu
 
 
 def quantify_nuclei(df, quant_cols=('ch0',)):
@@ -111,3 +113,56 @@ def quantify_bacteria_1row(row, quant_col='data'):
     raw_sum = np.sum(signal)
 
     return bkg_sub_sum, raw_sum, bkg
+
+
+def compute_line_dist_from_mip(mip, bkg=None, ap=None, method='mean'):
+    # if background is not supplied, calculate it using a multiotsu method
+    if bkg is None:
+        bkg = 10 ** threshold_multiotsu(np.log10(mip[mip > 0]))[-1]
+
+    # subtract background
+    mip = mip.astype('float32')
+    mip -= bkg
+    mip[mip < 0] = 0
+
+    if ap is None:
+        short_axis = np.where(mip.shape == np.min(mip.shape))[0][0]
+        #line_dist = np.sum(mip, axis=short_axis)
+        if method == 'mean':
+            line_dist = np.sum(mip, axis=short_axis) / np.sum(mip > 0, axis=short_axis)
+        elif method == 'sum':
+            line_dist = np.sum(mip, axis=short_axis)
+        else:
+            raise ValueError('compute_line_dist_from_mip: method can only be mean or sum')
+
+    else:
+        intens = mip[mip > 0]
+        Y, X = np.indices(mip.shape)
+        good_Y = Y[mip > 0]
+        good_X = X[mip > 0]
+
+        line_dist = np.zeros(len(ap))
+
+        for i in range(len(intens)):
+            loc = (good_Y[i], good_X[i])
+            inten = intens[i]
+            this_ap = get_ap(loc, ap)
+            line_dist[int(this_ap)] += inten
+
+    return line_dist
+
+
+def get_ap(loc, ap):
+    """loc = (y,x) of interest, ap = ap DF"""
+    ap_vals = ap.get(['y', 'x']).values
+    distances = distance(loc, ap_vals)
+    ap_value = np.argwhere(distances == np.nanmin(distances))
+    if len(ap_value) > 1:
+        ap_value = ap_value[0]
+
+    return ap_value
+
+
+def distance(x, y):
+    """ x = 1xd, y = Nxd"""
+    return np.sqrt(np.sum((x - y) ** 2, axis=1))
