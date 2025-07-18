@@ -2,8 +2,8 @@ import cupy as cp
 import numpy as np
 import dask.array as da
 import zarr
-from cucim.skimage.filters import gaussian, frangi, median, sobel
-from cucim.skimage.morphology import binary_opening, binary_erosion, disk, white_tophat
+from cucim.skimage.filters import gaussian, frangi, median, sobel, difference_of_gaussians
+from cucim.skimage.morphology import binary_opening, binary_erosion, disk, white_tophat, binary_closing
 from cucim.skimage.measure import label
 from cucim.skimage.segmentation import morphological_geodesic_active_contour
 from dexp.datasets import ZDataset
@@ -32,18 +32,19 @@ def frangi_filter(arr, _sigma_blur, _sigmas, _alpha, _beta, _gamma, thresh):
     # apply some filters
     arr = gaussian(arr, sigma=_sigma_blur)
     if _sigmas > 0:
-        arr = frangi(arr, sigmas=_sigmas, alpha=_alpha, beta=_beta, gamma=_gamma)
-
+        #arr = frangi(arr, sigmas=_sigmas, alpha=_alpha, beta=_beta, gamma=_gamma)
+        arr = difference_of_gaussians(arr, low_sigma=_sigmas)
     # create and apply a mask
-    arr = arr < thresh
-    #arr = arr > thresh
+    #arr = arr < thresh
+    arr = arr > thresh
     #arr = arr * (og_arr > 3000)
     #arr = binary_opening(arr, disk(9))
     #arr = binary_erosion(arr, disk(5))
+    arr = binary_closing(arr, disk(39))
     #arr = arr == 0
 
     #arr = arr * og_arr
-    arr = label(arr)
+    #arr = label(arr)
 
     # reshape into 3D arr
     arr = cp.expand_dims(arr, axis=0)
@@ -93,11 +94,17 @@ def magic_func(layer: ImageData, sigma_blur: float = 1.0, beta: float = 0.5, l_g
 #mem_da = da.from_array(mem[0, 0], chunks=mem.chunks[2:])
 #mem_da = da.from_array(mem, chunks=(1, 8200, 2071))
 #mem_da = da.from_array(mem[0], chunks=(1, 1024, 1024))
-mem = np.array(Image.open(path_to_mip))
+#mem = np.array(Image.open(path_to_mip))
 #mem = mem > 0.4
 #mem = distance_transform_edt(mem)
-mem = np.expand_dims(mem, axis=0)
-mem_da = da.from_array(mem)
+#mem = np.expand_dims(mem, axis=0)
+#path_to_zarr = r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2023_02_07_dpt-gfp_r4-gal4_uas-mcd8-mcherry_ecoli-hs-dtom_earlyL3_24hrs/larvae_1/prediction.rechunk.ome.zarr/0'
+path_to_zarr = r'/media/brandon/Data1/Brandon/fly_immune/Lightsheet_Z1/2023_02_07_dpt-gfp_r4-gal4_uas-mcd8-mcherry_ecoli-hs-dtom_earlyL3_24hrs/larvae_1/prediction.rechunk.ome.zarr/0'
+#mem = zarr.open(path_to_zarr, 'r')
+mem_da = da.from_zarr(path_to_zarr)[0, 0]
+#mem = zarr.open(path_to_zarr, 'r')[0, 0]
+#mem_da = da.from_zarr(path_to_zarr)[0, 0]
+#mem_da = da.from_array(mem)
 
 #filt_np = gpu_process(mem_da, beta)
 

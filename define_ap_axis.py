@@ -56,7 +56,7 @@ def interpolate_points(points_layer: Points, n_bins: int=100) -> napari.layers.P
     return interpolated_points_layer
 
 # set up
-path_to_mip = r'/media/brandon/Data2/Brandon/fly_immune/Lightsheet_Z1/2023_05_03-dpt-gfp_r4-gal4_uas-mcd8-mcherry_ecoli-hs-dtom_early-mid_24hrs_high_dose/larvae_6/mips/mip_red_0.tif'
+path_to_mip = r'/media/brandon/Data2/Brandon/fly_immune/Lightsheet_Z1/2023_05_03-dpt-gfp_r4-gal4_uas-mcd8-mcherry_ecoli-hs-dtom_early-mid_24hrs_high_dose/larvae_1/mips/mip_red_0.tif'
 save_dir = Path(path_to_mip).parent.parent / 'ap'
 save_dir.mkdir(exist_ok=True)
 mip = imread(path_to_mip)
